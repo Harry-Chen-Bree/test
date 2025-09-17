@@ -13,14 +13,14 @@ jobs:
   route:
     # Only on PRs, only when someone types /best-practices (or @Cursor best-practices),
     # and only from maintainers.
-    if: >
-      github.event.issue.pull_request &&
-      (contains(github.event.comment.body, '/best-practices') ||
-       contains(github.event.comment.body, '@Cursor') && contains(github.event.comment.body, 'best-practices')) &&
-      (github.event.comment.author_association == 'OWNER' ||
-       github.event.comment.author_association == 'MEMBER' ||
-       github.event.comment.author_association == 'COLLABORATOR')
-
+    if: >-
+      ${{ github.event.issue.pull_request &&
+          ( contains(github.event.comment.body, '/best-practices') ||
+            ( contains(github.event.comment.body, '@Cursor') &&
+              contains(github.event.comment.body, 'best-practices') ) ) &&
+          ( github.event.comment.author_association == 'OWNER' ||
+            github.event.comment.author_association == 'MEMBER' ||
+            github.event.comment.author_association == 'COLLABORATOR' ) }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -28,6 +28,9 @@ jobs:
       PR_NUMBER: ${{ github.event.issue.number }}
       API: ${{ github.api_url }}
     steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Fetch PR metadata
         id: pr
         run: |
@@ -53,39 +56,44 @@ jobs:
         id: decide
         run: |
           set -euo pipefail
-          # Consider "source" as ts/tsx/js/jsx files, excluding d.ts, tests/specs/stories and __tests__
-          SRC=$(jq -r 'select(.filename | test("\\.(ts|tsx|js|jsx)$")) 
-                        | select(.filename | test("\\.d\\.ts$")|not)
-                        | select(.filename | test("(^|/)__tests__/")|not)
-                        | select(.filename | test("\\.(test|spec|stories)\\.(ts|tsx|js|jsx)$")|not)
-                        | .filename' files.json)
 
-          # Obvious "skip-only" categories (docs/rules): md/mdx, docs/, .github/, .cursor/
-          ONLY_SKIP=$(jq -r '.filename | select(
-              test("\\.(md|mdx)$") or
-              test("^docs/") or
-              test("^\\.github/") or
-              test("^\\.cursor/")
-            )' files.json)
-
-          SRC_COUNT=$(printf "%s\n" "$SRC" | sed '/^$/d' | wc -l | tr -d ' ')
-          SKIP_COUNT=$(printf "%s\n" "$ONLY_SKIP" | sed '/^$/d' | wc -l | tr -d ' ')
-
-          # If there are zero source files AND there is at least one docs/rules file, we skip.
-          if [ "$SRC_COUNT" -eq 0 ] && [ "$SKIP_COUNT" -gt 0 ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          # Allow /best-practices force to bypass skipping
+          COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
+          if echo "$COMMENT_BODY" | grep -qi '\bforce\b'; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            # Treat these as "source" files; exclude d.ts, tests/specs/stories and __tests__
+            SRC=$(jq -r 'select(.filename | test("\\.(ts|tsx|js|jsx)$")) 
+                          | select(.filename | test("\\.d\\.ts$")|not)
+                          | select(.filename | test("(^|/)__tests__/")|not)
+                          | select(.filename | test("\\.(test|spec|stories)\\.(ts|tsx|js|jsx)$")|not)
+                          | .filename' files.json)
+
+            # Docs/rules-only buckets we can skip
+            ONLY_SKIP=$(jq -r '.filename | select(
+                test("\\.(md|mdx)$") or
+                test("^docs/") or
+                test("^\\.github/") or
+                test("^\\.cursor/")
+              )' files.json)
+
+            SRC_COUNT=$(printf "%s\n" "$SRC" | sed '/^$/d' | wc -l | tr -d ' ')
+            SKIP_COUNT=$(printf "%s\n" "$ONLY_SKIP" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$SRC_COUNT" -eq 0 ] && [ "$SKIP_COUNT" -gt 0 ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
           # Build a limited list of source files to review (max 8)
-          printf "%s\n" "$SRC" | sed '/^$/d' | head -n 8 > src_list.txt
+          printf "%s\n" ${SRC:-} | sed '/^$/d' | head -n 8 > src_list.txt || true
           # Choose mode: deep if >3 files
-          if [ "$(wc -l < src_list.txt | tr -d ' ')" -gt 3 ]; then MODE="deep"; else MODE="quick"; fi
+          if [ -s src_list.txt ] && [ "$(wc -l < src_list.txt | tr -d ' ')" -gt 3 ]; then MODE="deep"; else MODE="quick"; fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Comment: skipping (docs/tests-only)
-        if: steps.decide.outputs.skip == 'true'
+        if: ${{ steps.decide.outputs.skip == 'true' }}
         run: |
           body='⏭️ Skipping best-practices run: this PR changes only docs/tests/rules. Re-run with code changes or override by mentioning `@Cursor best-practices force`.'
           curl -fsSL -X POST -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
@@ -93,7 +101,7 @@ jobs:
             "${API}/repos/${REPO}/issues/${PR_NUMBER}/comments"
 
       - name: Post @Cursor prompt (autonomous)
-        if: steps.decide.outputs.skip != 'true'
+        if: ${{ steps.decide.outputs.skip != 'true' }}
         run: |
           set -euo pipefail
           HEAD_REF="${{ steps.pr.outputs.head_ref }}"
@@ -106,7 +114,7 @@ jobs:
             AUTOFIX="disabled"
           fi
 
-          FILES=$(sed 's/^/- /' src_list.txt | sed ':a;N;$!ba;s/\n/\\n/g')
+          FILES=$(sed 's/^/- /' src_list.txt | sed ':a;N;$!ba;s/\n/\\n/g' || true)
           [ -z "$FILES" ] && FILES="- (no .ts/.tsx/.js/.jsx files detected)"
 
           read -r -d '' PROMPT <<'EOF'
@@ -167,7 +175,7 @@ ${FILES}
 - Do **not** merge anything.
 EOF
 
-          # Expand vars in the template
+          # Expand variables in template
           PROMPT="${PROMPT//'${MODE}'/${MODE}}"
           PROMPT="${PROMPT//'${AUTOFIX}'/${AUTOFIX}}"
           PROMPT="${PROMPT//'${PR_NUMBER}'/${PR_NUMBER}}"
@@ -175,7 +183,6 @@ EOF
           PROMPT="${PROMPT//'${FILES}'/$(printf "%s" "$FILES" | sed 's/[&/]/\\&/g')}"
           PROMPT="${PROMPT//'${MODE^^}'/$(echo "$MODE" | tr '[:lower:]' '[:upper:]')}"
 
-          # Post the composed @Cursor prompt as a PR comment
           jq -n --arg body "$PROMPT" '{body:$body}' > body.json
           curl -fsSL -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \

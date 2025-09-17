@@ -1,0 +1,184 @@
+name: Cursor Best-Practices (mention-only)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  route:
+    # Only on PRs, only when someone types /best-practices (or @Cursor best-practices),
+    # and only from maintainers.
+    if: >
+      github.event.issue.pull_request &&
+      (contains(github.event.comment.body, '/best-practices') ||
+       contains(github.event.comment.body, '@Cursor') && contains(github.event.comment.body, 'best-practices')) &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+      API: ${{ github.api_url }}
+    steps:
+      - name: Fetch PR metadata
+        id: pr
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${API}/repos/${REPO}/pulls/${PR_NUMBER}" > pr.json
+          echo "head_ref=$(jq -r .head.ref pr.json)" >> "$GITHUB_OUTPUT"
+          echo "is_fork=$(jq -r '.head.repo.fork' pr.json)" >> "$GITHUB_OUTPUT"
+          echo "can_modify=$(jq -r '.maintainer_can_modify' pr.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Collect changed files (first 300)
+        run: |
+          set -euo pipefail
+          : > files.json
+          for page in 1 2 3; do
+            CHUNK=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "${API}/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100&page=${page}")
+            echo "$CHUNK" | jq -c '.[]' >> files.json
+            [ "$(echo "$CHUNK" | jq 'length')" -lt 100 ] && break
+          done
+
+      - name: Decide if this PR is worth a best-practices run
+        id: decide
+        run: |
+          set -euo pipefail
+          # Consider "source" as ts/tsx/js/jsx files, excluding d.ts, tests/specs/stories and __tests__
+          SRC=$(jq -r 'select(.filename | test("\\.(ts|tsx|js|jsx)$")) 
+                        | select(.filename | test("\\.d\\.ts$")|not)
+                        | select(.filename | test("(^|/)__tests__/")|not)
+                        | select(.filename | test("\\.(test|spec|stories)\\.(ts|tsx|js|jsx)$")|not)
+                        | .filename' files.json)
+
+          # Obvious "skip-only" categories (docs/rules): md/mdx, docs/, .github/, .cursor/
+          ONLY_SKIP=$(jq -r '.filename | select(
+              test("\\.(md|mdx)$") or
+              test("^docs/") or
+              test("^\\.github/") or
+              test("^\\.cursor/")
+            )' files.json)
+
+          SRC_COUNT=$(printf "%s\n" "$SRC" | sed '/^$/d' | wc -l | tr -d ' ')
+          SKIP_COUNT=$(printf "%s\n" "$ONLY_SKIP" | sed '/^$/d' | wc -l | tr -d ' ')
+
+          # If there are zero source files AND there is at least one docs/rules file, we skip.
+          if [ "$SRC_COUNT" -eq 0 ] && [ "$SKIP_COUNT" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Build a limited list of source files to review (max 8)
+          printf "%s\n" "$SRC" | sed '/^$/d' | head -n 8 > src_list.txt
+          # Choose mode: deep if >3 files
+          if [ "$(wc -l < src_list.txt | tr -d ' ')" -gt 3 ]; then MODE="deep"; else MODE="quick"; fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Comment: skipping (docs/tests-only)
+        if: steps.decide.outputs.skip == 'true'
+        run: |
+          body='⏭️ Skipping best-practices run: this PR changes only docs/tests/rules. Re-run with code changes or override by mentioning `@Cursor best-practices force`.'
+          curl -fsSL -X POST -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            -d "{\"body\":\"${body}\"}" \
+            "${API}/repos/${REPO}/issues/${PR_NUMBER}/comments"
+
+      - name: Post @Cursor prompt (autonomous)
+        if: steps.decide.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          HEAD_REF="${{ steps.pr.outputs.head_ref }}"
+          IS_FORK="${{ steps.pr.outputs.is_fork }}"
+          CAN_MOD="${{ steps.pr.outputs.can_modify }}"
+          MODE="${{ steps.decide.outputs.mode }}"
+
+          AUTOFIX="enabled"
+          if [ "$IS_FORK" = "true" ] && [ "$CAN_MOD" != "true" ]; then
+            AUTOFIX="disabled"
+          fi
+
+          FILES=$(sed 's/^/- /' src_list.txt | sed ':a;N;$!ba;s/\n/\\n/g')
+          [ -z "$FILES" ] && FILES="- (no .ts/.tsx/.js/.jsx files detected)"
+
+          read -r -d '' PROMPT <<'EOF'
+@Cursor best-practices ${MODE}  (autofix: ${AUTOFIX})
+
+You are a **Senior Reviewer**. Enforce industry best practices with smallest-diff fixes. Keep public APIs stable; avoid rewrites. Work autonomously.
+
+## Scope — review ONLY these files
+${FILES}
+
+## STOP CONDITIONS (immediate No-Go)
+- PII/secrets in code/logs/examples.
+- Unvalidated inputs or injection-prone strings.
+- External IO without timeout + retry/backoff + error handling.
+- Silent error swallowing or broken public contracts.
+
+## FOCUS CHECKLIST
+- Correctness/invariants; input validation and schema boundaries.
+- Security/PII; secrets handling.
+- External IO: timeouts, retries/backoff, idempotency.
+- Concurrency and cancellation.
+- Errors: typed errors, preserved context, no silent catches.
+- Observability: logs/metrics/traces (no PII), sampling/rate limits.
+- Tests: critical paths, negative/edge cases; smallest-diff additions.
+- Perf: obvious hotspots only; avoid premature tweaks.
+
+## STYLE
+- Minimal diffs; preserve behavior and public APIs.
+- Prefer in-file edits; propose at most N patches (3 quick, 5 deep).
+- Include brief devil’s-advocate **Counterpoints** (2–3 bullets) that challenge assumptions.
+
+## OUTPUT — ${MODE^^}
+- QUICK (≤3 files):  
+  1) Objective (1–2 lines)  
+  2) Findings (Blocker/Major/Minor/Nit: file:lines • issue • why • smallest-diff fix)  
+  3) SOLID Snapshot (one example)  
+  4) Tests — what to add + up to 3 example names  
+  5) Patches — up to 3 minimal patches (unified diff)  
+  6) Go/No-Go — one line; if No-Go list Blockers only  
+  7) Counterpoints (2–3 bullets)  
+- DEEP (>3 files or risky):  
+  1) Objective • 2) Risk Summary • 3) Findings Table • 4) SOLID Snapshot •
+  5) Tests (4–6 names) • 6) Patches (≤5) • 7) Observability hooks • 8) Go/No-Go • 9) Counterpoints
+
+## AUTONOMY
+- If ${AUTOFIX}:
+  - Create branch: `chore/cursor-best-practices-PR-${PR_NUMBER}` off current PR head.
+  - Apply **minimal, safe fixes** for Blocker/Major issues only (avoid refactors).
+  - Commit with conventional messages (e.g., `fix(security): ...`, `chore: ...`).
+  - Push and open a PR **targeting** `${HEAD_REF}` (the original PR’s head branch).
+  - Reply here with a summary + fix-PR link.
+- If disabled (fork without maintainer edits): perform full analysis, then reply with **unified diff suggestions** in the comment instead of pushing code.
+
+## NOTES
+- If dependencies or types are needed, you may run:
+  `corepack enable && corepack prepare pnpm@10.16.0 --activate && pnpm install --frozen-lockfile --ignore-scripts`
+- Do **not** run lints/tsc/tests unless required to validate a proposed fix.
+- Do **not** merge anything.
+EOF
+
+          # Expand vars in the template
+          PROMPT="${PROMPT//'${MODE}'/${MODE}}"
+          PROMPT="${PROMPT//'${AUTOFIX}'/${AUTOFIX}}"
+          PROMPT="${PROMPT//'${PR_NUMBER}'/${PR_NUMBER}}"
+          PROMPT="${PROMPT//'${HEAD_REF}'/${HEAD_REF}}"
+          PROMPT="${PROMPT//'${FILES}'/$(printf "%s" "$FILES" | sed 's/[&/]/\\&/g')}"
+          PROMPT="${PROMPT//'${MODE^^}'/$(echo "$MODE" | tr '[:lower:]' '[:upper:]')}"
+
+          # Post the composed @Cursor prompt as a PR comment
+          jq -n --arg body "$PROMPT" '{body:$body}' > body.json
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d @body.json \
+            "${API}/repos/${REPO}/issues/${PR_NUMBER}/comments"

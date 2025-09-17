@@ -132,7 +132,7 @@ jobs:
           FILES=$(sed 's/^/- /' src_list.txt | sed ':a;N;$!ba;s/\n/\\n/g' || true)
           [ -z "$FILES" ] && FILES="- (no .ts/.tsx/.js/.jsx files detected)"
 
-          read -r -d '' PROMPT <<'EOF'
+          read -r -d '' PROMPT <<'EOF' || true
           @Cursor best-practices ${MODE}  (autofix: ${AUTOFIX})
 
           You are a **Senior Reviewer**. Enforce industry best practices with smallest-diff fixes. Keep public APIs stable; avoid rewrites. Work autonomously.

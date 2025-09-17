@@ -36,8 +36,13 @@ jobs:
         id: pr
         run: |
           set -euo pipefail
+          echo "::debug::Fetching PR #${PR_NUMBER} metadata from ${API}/repos/${REPO}/pulls/${PR_NUMBER}"
           curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
-            "${API}/repos/${REPO}/pulls/${PR_NUMBER}" > pr.json
+            "${API}/repos/${REPO}/pulls/${PR_NUMBER}" > pr.json || {
+            echo "::error::Failed to fetch PR metadata"
+            exit 1
+          }
+          echo "::debug::PR metadata fetched successfully"
           echo "head_ref=$(jq -r .head.ref pr.json)" >> "$GITHUB_OUTPUT"
           echo "is_fork=$(jq -r '.head.repo.fork' pr.json)" >> "$GITHUB_OUTPUT"
           echo "can_modify=$(jq -r '.maintainer_can_modify' pr.json)" >> "$GITHUB_OUTPUT"
@@ -47,11 +52,17 @@ jobs:
           set -euo pipefail
           : > files.json
           for page in 1 2 3; do
+            echo "::debug::Fetching files page ${page}"
             CHUNK=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
-              "${API}/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100&page=${page}")
-            echo "$CHUNK" | jq -c '.[]' >> files.json
+              "${API}/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100&page=${page}" || echo "[]")
+            if [ "$CHUNK" = "[]" ] || [ -z "$CHUNK" ]; then
+              echo "::warning::Failed to fetch files for page ${page}"
+              break
+            fi
+            echo "$CHUNK" | jq -c '.[]' >> files.json || true
             [ "$(echo "$CHUNK" | jq 'length')" -lt 100 ] && break
           done
+          echo "::debug::Collected $(wc -l < files.json) changed files"
 
       - name: Decide if this PR is worth a best-practices run
         id: decide
@@ -68,7 +79,7 @@ jobs:
                           | select(.filename | test("\\.d\\.ts$")|not)
                           | select(.filename | test("(^|/)__tests__/")|not)
                           | select(.filename | test("\\.(test|spec|stories)\\.(ts|tsx|js|jsx)$")|not)
-                          | .filename' files.json)
+                          | .filename' files.json 2>/dev/null || echo "")
 
             # Docs/rules-only buckets we can skip
             ONLY_SKIP=$(jq -r '.filename | select(
@@ -76,7 +87,7 @@ jobs:
                 test("^docs/") or
                 test("^\\.github/") or
                 test("^\\.cursor/")
-              )' files.json)
+              )' files.json 2>/dev/null || echo "")
 
             SRC_COUNT=$(printf "%s\n" "$SRC" | sed '/^$/d' | wc -l | tr -d ' ')
             SKIP_COUNT=$(printf "%s\n" "$ONLY_SKIP" | sed '/^$/d' | wc -l | tr -d ' ')
@@ -89,9 +100,12 @@ jobs:
 
           # Build a limited list of source files to review (max 8)
           printf "%s\n" ${SRC:-} | sed '/^$/d' | head -n 8 > src_list.txt || true
+          echo "::debug::Source files to review:"
+          cat src_list.txt 2>/dev/null || echo "(none)"
           # Choose mode: deep if >3 files
           if [ -s src_list.txt ] && [ "$(wc -l < src_list.txt | tr -d ' ')" -gt 3 ]; then MODE="deep"; else MODE="quick"; fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "::debug::Mode selected: $MODE"
 
       - name: "Comment: skipping (docs/tests-only)"
         if: ${{ steps.decide.outputs.skip == 'true' }}

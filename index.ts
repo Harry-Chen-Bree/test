@@ -36,17 +36,27 @@ async function start() {
   const server = await buildServer();
 
   try {
-    const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
+    const portStr = process.env.PORT || '8080';
+    const port = parseInt(portStr, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      throw new Error(`Invalid PORT: ${portStr}. Must be between 1-65535`);
+    }
     const host = process.env.HOST || '0.0.0.0';
 
     await server.listen({ port, host });
-    console.log(`Loan Orchestrator server listening on ${host}:${port}`);
+    server.log.info({ host, port, service: 'loan-orchestrator' }, 'Server started');
 
     // Graceful shutdown handlers
     const close = async (signal: string) => {
-      console.log(`Received ${signal}, closing Loan Orchestrator server...`);
+      server.log.info({ signal }, 'Shutdown initiated');
+      const shutdownTimeout = setTimeout(() => {
+        server.log.error('Graceful shutdown timeout, forcing exit');
+        process.exit(1);
+      }, 10000); // 10 second timeout
+      
       await server.close();
-      console.log('Loan Orchestrator server closed successfully');
+      clearTimeout(shutdownTimeout);
+      server.log.info('Server closed successfully');
       process.exit(0);
     };
 
@@ -60,7 +70,7 @@ async function start() {
 
 // Start the server
 start().catch((err) => {
-  console.error('Failed to start Loan Orchestrator:', err);
+  // Error already logged by server.log.error in start()
   process.exit(1);
 });
 

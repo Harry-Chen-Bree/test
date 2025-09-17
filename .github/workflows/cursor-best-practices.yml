@@ -2,7 +2,8 @@ name: Cursor Best-Practices (mention-only)
 
 on:
   issue_comment:
-    types: [created]
+    types:
+      - created
 
 permissions:
   contents: read
@@ -92,7 +93,7 @@ jobs:
           if [ -s src_list.txt ] && [ "$(wc -l < src_list.txt | tr -d ' ')" -gt 3 ]; then MODE="deep"; else MODE="quick"; fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-      - name: Comment: skipping (docs/tests-only)
+      - name: "Comment: skipping (docs/tests-only)"
         if: ${{ steps.decide.outputs.skip == 'true' }}
         run: |
           body='⏭️ Skipping best-practices run: this PR changes only docs/tests/rules. Re-run with code changes or override by mentioning `@Cursor best-practices force`.'
@@ -118,62 +119,62 @@ jobs:
           [ -z "$FILES" ] && FILES="- (no .ts/.tsx/.js/.jsx files detected)"
 
           read -r -d '' PROMPT <<'EOF'
-@Cursor best-practices ${MODE}  (autofix: ${AUTOFIX})
+          @Cursor best-practices ${MODE}  (autofix: ${AUTOFIX})
 
-You are a **Senior Reviewer**. Enforce industry best practices with smallest-diff fixes. Keep public APIs stable; avoid rewrites. Work autonomously.
+          You are a **Senior Reviewer**. Enforce industry best practices with smallest-diff fixes. Keep public APIs stable; avoid rewrites. Work autonomously.
 
-## Scope — review ONLY these files
-${FILES}
+          ## Scope — review ONLY these files
+          ${FILES}
 
-## STOP CONDITIONS (immediate No-Go)
-- PII/secrets in code/logs/examples.
-- Unvalidated inputs or injection-prone strings.
-- External IO without timeout + retry/backoff + error handling.
-- Silent error swallowing or broken public contracts.
+          ## STOP CONDITIONS (immediate No-Go)
+          - PII/secrets in code/logs/examples.
+          - Unvalidated inputs or injection-prone strings.
+          - External IO without timeout + retry/backoff + error handling.
+          - Silent error swallowing or broken public contracts.
 
-## FOCUS CHECKLIST
-- Correctness/invariants; input validation and schema boundaries.
-- Security/PII; secrets handling.
-- External IO: timeouts, retries/backoff, idempotency.
-- Concurrency and cancellation.
-- Errors: typed errors, preserved context, no silent catches.
-- Observability: logs/metrics/traces (no PII), sampling/rate limits.
-- Tests: critical paths, negative/edge cases; smallest-diff additions.
-- Perf: obvious hotspots only; avoid premature tweaks.
+          ## FOCUS CHECKLIST
+          - Correctness/invariants; input validation and schema boundaries.
+          - Security/PII; secrets handling.
+          - External IO: timeouts, retries/backoff, idempotency.
+          - Concurrency and cancellation.
+          - Errors: typed errors, preserved context, no silent catches.
+          - Observability: logs/metrics/traces (no PII), sampling/rate limits.
+          - Tests: critical paths, negative/edge cases; smallest-diff additions.
+          - Perf: obvious hotspots only; avoid premature tweaks.
 
-## STYLE
-- Minimal diffs; preserve behavior and public APIs.
-- Prefer in-file edits; propose at most N patches (3 quick, 5 deep).
-- Include brief devil’s-advocate **Counterpoints** (2–3 bullets) that challenge assumptions.
+          ## STYLE
+          - Minimal diffs; preserve behavior and public APIs.
+          - Prefer in-file edits; propose at most N patches (3 quick, 5 deep).
+          - Include brief devil’s-advocate **Counterpoints** (2–3 bullets) that challenge assumptions.
 
-## OUTPUT — ${MODE^^}
-- QUICK (≤3 files):  
-  1) Objective (1–2 lines)  
-  2) Findings (Blocker/Major/Minor/Nit: file:lines • issue • why • smallest-diff fix)  
-  3) SOLID Snapshot (one example)  
-  4) Tests — what to add + up to 3 example names  
-  5) Patches — up to 3 minimal patches (unified diff)  
-  6) Go/No-Go — one line; if No-Go list Blockers only  
-  7) Counterpoints (2–3 bullets)  
-- DEEP (>3 files or risky):  
-  1) Objective • 2) Risk Summary • 3) Findings Table • 4) SOLID Snapshot •
-  5) Tests (4–6 names) • 6) Patches (≤5) • 7) Observability hooks • 8) Go/No-Go • 9) Counterpoints
+          ## OUTPUT — ${MODE^^}
+          - QUICK (≤3 files):  
+            1) Objective (1–2 lines)  
+            2) Findings (Blocker/Major/Minor/Nit: file:lines • issue • why • smallest-diff fix)  
+            3) SOLID Snapshot (one example)  
+            4) Tests — what to add + up to 3 example names  
+            5) Patches — up to 3 minimal patches (unified diff)  
+            6) Go/No-Go — one line; if No-Go list Blockers only  
+            7) Counterpoints (2–3 bullets)  
+          - DEEP (>3 files or risky):  
+            1) Objective •  2) Risk Summary •  3) Findings Table •  4) SOLID Snapshot •
+            5) Tests (4–6 names) •  6) Patches (≤5) •  7) Observability hooks •  8) Go/No-Go •  9) Counterpoints
 
-## AUTONOMY
-- If ${AUTOFIX}:
-  - Create branch: `chore/cursor-best-practices-PR-${PR_NUMBER}` off current PR head.
-  - Apply **minimal, safe fixes** for Blocker/Major issues only (avoid refactors).
-  - Commit with conventional messages (e.g., `fix(security): ...`, `chore: ...`).
-  - Push and open a PR **targeting** `${HEAD_REF}` (the original PR’s head branch).
-  - Reply here with a summary + fix-PR link.
-- If disabled (fork without maintainer edits): perform full analysis, then reply with **unified diff suggestions** in the comment instead of pushing code.
+          ## AUTONOMY
+          - If ${AUTOFIX}:
+            - Create branch: `chore/cursor-best-practices-PR-${PR_NUMBER}` off current PR head.
+            - Apply **minimal, safe fixes** for Blocker/Major issues only (avoid refactors).
+            - Commit with conventional messages (e.g., `fix(security): ...`, `chore: ...`).
+            - Push and open a PR **targeting** `${HEAD_REF}` (the original PR’s head branch).
+            - Reply here with a summary + fix-PR link.
+          - If disabled (fork without maintainer edits): perform full analysis, then reply with **unified diff suggestions** in the comment instead of pushing code.
 
-## NOTES
-- If dependencies or types are needed, you may run:
-  `corepack enable && corepack prepare pnpm@10.16.0 --activate && pnpm install --frozen-lockfile --ignore-scripts`
-- Do **not** run lints/tsc/tests unless required to validate a proposed fix.
-- Do **not** merge anything.
-EOF
+          ## NOTES
+          - If dependencies or types are needed, you may run:
+            `corepack enable && corepack prepare pnpm@10.16.0 --activate && pnpm install --frozen-lockfile --ignore-scripts`
+          - Do **not** run lints/tsc/tests unless required to validate a proposed fix.
+          - Do **not** merge anything.
+          EOF
 
           # Expand variables in template
           PROMPT="${PROMPT//'${MODE}'/${MODE}}"

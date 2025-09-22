@@ -33,7 +33,7 @@ jobs:
 
       - name: Install dependencies (ignore scripts)
         working-directory: eventcatalog
-        run: npm ci --ignore-scripts
+        run: npm install --ignore-scripts
 
       - name: Build EventCatalog
         working-directory: eventcatalog

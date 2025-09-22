@@ -1,0 +1,55 @@
+name: Deploy EventCatalog to GitHub Pages
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'eventcatalog/**'
+      - '.github/workflows/deploy-eventcatalog.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: 'pages'
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'eventcatalog/package-lock.json'
+
+      - name: Install dependencies (ignore scripts)
+        working-directory: eventcatalog
+        run: npm ci --ignore-scripts
+
+      - name: Build EventCatalog
+        working-directory: eventcatalog
+        env:
+          EC_BASE: /${{ github.event.repository.name }}
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: eventcatalog/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

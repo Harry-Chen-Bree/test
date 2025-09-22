@@ -1,0 +1,20 @@
+{
+  "name": "eventcatalog",
+  "version": "1.0.0",
+  "description": "",
+  "main": "eventcatalog.auth.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "eventcatalog dev",
+    "build": "eventcatalog build",
+    "start": "npm run dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "private": "true",
+  "devDependencies": {
+    "@eventcatalog/core": "^2.57.1"
+  }
+}

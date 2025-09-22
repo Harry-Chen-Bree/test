@@ -13,8 +13,8 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-  "private": "true",
+  "private": true,
   "devDependencies": {
-    "@eventcatalog/core": "^2.57.1"
+    "@eventcatalog/core": "2.57.1"
   }
 }
